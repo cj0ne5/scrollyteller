@@ -83,6 +83,15 @@ main{display:grid;grid-template-columns:minmax(300px,30%) 1fr 310px;min-height:0
 #inspector input[type=text],#inspector input[type=number],#inspector select,#inspector textarea{
   width:100%;padding:5px 7px;border:1px solid var(--line);border-radius:6px;background:#fff}
 #inspector textarea{resize:vertical;min-height:70px}
+.rt-bar{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px}
+.rt-bar button,.rt-bar .rt-color{padding:2px 8px;font-size:12px;min-width:28px}
+.rt-bar .rt-color{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:6px;cursor:pointer}
+.rt-bar .rt-color input{width:22px;height:18px;border:0;padding:0;background:none;cursor:pointer}
+.rt{min-height:90px;max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:6px 8px;
+  background:#fff;white-space:pre-wrap;overflow-wrap:break-word;margin-bottom:8px;outline:none}
+.rt:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(47,111,237,.2)}
+.rt a{color:#2563eb;text-decoration:underline}
+.rt p{margin:0}.rt ul,.rt ol{margin:0;padding-left:1.3em}
 #inspector input[type=color]{width:100%;height:30px;border:1px solid var(--line);border-radius:6px;padding:2px;background:#fff}
 #inspector input[type=range]{width:100%}
 #inspector .val{color:var(--muted)}
@@ -198,7 +207,7 @@ function scrollyRuntime(){
         img=document.createElement('img');img.src=c.src;img.alt=c.alt||'';img.draggable=false;
         box.appendChild(img);el.appendChild(box);
       }else{
-        txt=document.createElement('div');txt.className='sc-text';txt.textContent=c.text;el.appendChild(txt);
+        txt=document.createElement('div');txt.className='sc-text';txt.innerHTML=c.html;el.appendChild(txt);
       }
       stage.appendChild(el);
       return {c:c,el:el,img:img,txt:txt};
@@ -242,6 +251,8 @@ function scrollyRuntime(){
 var RUNTIME_CSS=
   '.sc-clip{position:absolute;box-sizing:border-box;transform-origin:center;will-change:transform,opacity}'+
   '.sc-text{white-space:pre-wrap;line-height:1.25;overflow-wrap:break-word;box-sizing:border-box}'+
+  '.sc-text a{color:inherit;text-decoration:underline;text-underline-offset:.15em}'+
+  '.sc-text p{margin:0}.sc-text ul,.sc-text ol{margin:0;padding-left:1.3em}'+
   '.sc-imgbox{width:100%;height:100%;overflow:hidden}'+
   '.sc-imgbox img{width:100%;height:100%;display:block;transform-origin:center;user-select:none}';
 
@@ -278,15 +289,54 @@ let undoStack=[], redoStack=[], lastSaved='';
 let mounted=[], mountKey='';
 const thumbs=new Map();
 
+/* ---------- rich text ---------- */
+const textToHtml=t=>esc(t).replace(/\n/g,'<br>');
+const KEEP_TAGS=new Set(['B','STRONG','I','EM','U','A','BR','DIV','P','UL','OL','LI','SPAN','FONT']);
+const DROP_TAGS=new Set(['SCRIPT','STYLE','IFRAME','OBJECT','EMBED','TEMPLATE','META','LINK','TITLE','HEAD']);
+// Only simple formatting, colors and http(s)/mailto links survive; everything else is stripped.
+function sanitize(html){
+  const body=new DOMParser().parseFromString(`<body>${html}</body>`,'text/html').body;
+  (function walk(node){
+    for(let ch of [...node.childNodes]){
+      if(ch.nodeType===3)continue;
+      if(ch.nodeType!==1||DROP_TAGS.has(ch.tagName)){ch.remove();continue}
+      if(!KEEP_TAGS.has(ch.tagName)){walk(ch);ch.replaceWith(...ch.childNodes);continue}
+      const color=ch.tagName==='FONT'?ch.getAttribute('color'):ch.style.color;
+      const href=(ch.getAttribute('href')||'').trim();
+      if(ch.tagName==='FONT'){const s=document.createElement('span');s.append(...ch.childNodes);ch.replaceWith(s);ch=s}
+      for(const a of [...ch.attributes])ch.removeAttribute(a.name);
+      if(color)ch.style.color=color;
+      if(ch.tagName==='A'){
+        if(!/^(https?:|mailto:)/i.test(href)){walk(ch);ch.replaceWith(...ch.childNodes);continue}
+        ch.setAttribute('href',href);ch.setAttribute('target','_blank');ch.setAttribute('rel','noopener');
+      }
+      if(ch.tagName==='SPAN'&&!ch.getAttribute('style')){walk(ch);ch.replaceWith(...ch.childNodes);continue}
+      walk(ch);
+    }
+  })(body);
+  return body.innerHTML;
+}
+function htmlToText(html){
+  const t=document.createElement('template');
+  t.innerHTML=html.replace(/<br\s*\/?>|<\/(div|p|li)>/gi,' $&');
+  return t.content.textContent;
+}
+
 /* ---------- model ---------- */
 function newClip(type,over){
   const base={id:uid(),type,lane:0,start:0,end:1.5,x:10,y:35,w:40,h:40,
     enter:'fade',enterLen:.3,exit:'fade',exitLen:.3,motion:'none'};
   const extra=type==='text'
-    ?{text:'Your text here',size:40,color:'#ffffff',font:FONTS[0][1],bold:false,align:'left',bg:'#000000',bgOpacity:0}
+    ?{html:'Your text here',size:40,color:'#ffffff',font:FONTS[0][1],bold:false,align:'left',bg:'#000000',bgOpacity:0}
     :{src:'',name:'image',alt:'',fit:'contain',x:15,y:10,w:70,h:80,kb:{z0:1,x0:0,y0:0,z1:1,x1:0,y1:0}};
   const c=Object.assign(base,extra,over||{});
   if(c.type==='image')c.kb=Object.assign({z0:1,x0:0,y0:0,z1:1,x1:0,y1:0},c.kb);
+  if(c.type==='text'){
+    // older projects stored plain text in `text`
+    if(over&&over.html==null&&over.text!=null)c.html=textToHtml(over.text);
+    delete c.text;
+    c.html=sanitize(c.html);
+  }
   return c;
 }
 function normalize(p){
@@ -354,7 +404,7 @@ function renderTimeline(){
   for(const c of project.clips){
     const dur=c.end-c.start, top=c.start*pxPer, ht=Math.max(dur*pxPer,10);
     let label;
-    if(c.type==='text')label=esc(c.text.slice(0,80)||'(empty text)');
+    if(c.type==='text')label=esc(htmlToText(c.html).trim().slice(0,80)||'(empty text)');
     else{
       const th=thumbFor(c.src);
       label=`🖼 ${esc(c.name)}${th?`<img src="${th}" alt="">`:''}`;
@@ -394,7 +444,7 @@ function thumbFor(src){
 }
 
 function renderPreview(){
-  const key=project.bg+'|'+project.clips.map(c=>c.id+':'+(c.type==='text'?c.text:c.src.length+c.alt)).join('|');
+  const key=project.bg+'|'+project.clips.map(c=>c.id+':'+(c.type==='text'?c.html:c.src.length+c.alt)).join('|');
   if(key!==mountKey){mounted=RT.mount($('#stage'),project);mountKey=key}
   RT.update(mounted,playhead);
   positionSelBox();
@@ -452,7 +502,17 @@ function clipForm(c){
     <div class="row"><button data-act="dup" title="Ctrl+D">Duplicate</button><button data-act="del" class="danger" title="Delete key">Delete</button></div></div>
   <h3>Content</h3>
   ${isText?`
-    <label>Text<textarea data-k="text" rows="4"></textarea></label>
+    <div class="rt-bar" aria-label="Text formatting">
+      <button data-rt="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+      <button data-rt="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+      <button data-rt="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+      <button data-rt="insertUnorderedList" title="Bullet list">• List</button>
+      <button data-rt="link" title="Turn the selected words into a link">🔗 Link</button>
+      <button data-rt="unlink" title="Remove link">Unlink</button>
+      <span class="rt-color" title="Color the selected words">A<input type="color" id="rt-color" value="#facc15"></span>
+      <button data-rt="removeFormat" title="Remove formatting from the selected words">Clear</button>
+    </div>
+    <div id="rt" class="rt" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Text"></div>
     <div class="grid2">
       <label>Size <span class="val"></span><input type="range" data-k="size" min="10" max="250" step="1"></label>
       <label>Font<select data-k="font">${opts(FONTS.map(([l,v])=>[v,l]))}</select></label>
@@ -529,12 +589,15 @@ function renderInspector(){
     const v=getPath(inp.dataset.scope==='project'?project:c,inp.dataset.k);
     if(inp.type==='checkbox')inp.checked=!!v;else inp.value=v;
   });
+  if(c&&c.type==='text')$('#rt').innerHTML=c.html;
+  rtRange=null;
   updateReadouts();
 }
+const isTyping=el=>!!el&&(/INPUT|TEXTAREA|SELECT/.test(el.tagName)||el.isContentEditable);
 // refresh field values without rebuilding (so typing isn't interrupted)
 function syncInspector(){
   const box=$('#inspector');
-  if(box.contains(document.activeElement)&&/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)){
+  if(box.contains(document.activeElement)&&isTyping(document.activeElement)){
     const c=sel&&byId(sel);
     box.querySelectorAll('[data-k]').forEach(inp=>{
       if(inp===document.activeElement)return;
@@ -804,9 +867,56 @@ $('#pv-frame').addEventListener('wheel',e=>{
 },{passive:false});
 $('#ph-slider').addEventListener('input',e=>setPlayhead(+e.target.value,true));
 
+/* ---------- rich text editing ---------- */
+let rtRange=null; // last selection inside the text editor, so toolbar clicks can act on it
+document.addEventListener('selectionchange',()=>{
+  const rt=$('#rt'),s=getSelection();
+  if(rt&&s.rangeCount&&rt.contains(s.anchorNode))rtRange=s.getRangeAt(0).cloneRange();
+});
+function rtChanged(){
+  const c=byId(sel),rt=$('#rt');
+  if(!c||!rt)return;
+  c.html=sanitize(rt.innerHTML);
+  render();
+}
+function rtCmd(cmd,val){
+  const rt=$('#rt');if(!rt)return;
+  rt.focus();
+  if(rtRange){const s=getSelection();s.removeAllRanges();s.addRange(rtRange)}
+  if(cmd==='link'){
+    const s=getSelection();
+    let url=prompt('Link address (for example https://www.census.gov)','https://');
+    if(!url||!url.trim()||url.trim()==='https://')return;
+    url=url.trim();
+    if(!/^[a-z]+:/i.test(url))url=(/@/.test(url)&&!/\//.test(url)?'mailto:':'https://')+url;
+    rt.focus();
+    if(rtRange){s.removeAllRanges();s.addRange(rtRange)}
+    if(s.isCollapsed)document.execCommand('insertHTML',false,`<a href="${esc(url)}">${esc(url)}</a>`);
+    else document.execCommand('createLink',false,url);
+  }else document.execCommand(cmd,false,val);
+  rtChanged();commit();
+}
+$('#inspector').addEventListener('mousedown',e=>{if(e.target.closest('[data-rt]'))e.preventDefault()});
+$('#inspector').addEventListener('click',e=>{const b=e.target.closest('[data-rt]');if(b)rtCmd(b.dataset.rt)});
+$('#inspector').addEventListener('focusout',e=>{if(e.target.id==='rt')commit()});
+$('#inspector').addEventListener('paste',e=>{
+  const node=e.target.nodeType===1?e.target:e.target.parentElement;
+  if(!node||!node.closest('#rt'))return;
+  e.preventDefault();
+  const html=e.clipboardData.getData('text/html');
+  if(html)document.execCommand('insertHTML',false,sanitize(html));
+  else document.execCommand('insertText',false,e.clipboardData.getData('text/plain'));
+});
+// links in the editor preview shouldn't navigate away
+$('#stage').addEventListener('click',e=>{if(e.target.closest('a'))e.preventDefault()});
+
 /* ---------- inspector events ---------- */
-$('#inspector').addEventListener('input',e=>{if(e.target.dataset.k)applyField(e.target)});
+$('#inspector').addEventListener('input',e=>{
+  if(e.target.id==='rt')rtChanged();
+  else if(e.target.dataset.k)applyField(e.target);
+});
 $('#inspector').addEventListener('change',e=>{
+  if(e.target.id==='rt-color')return rtCmd('foreColor',e.target.value);
   if(!e.target.dataset.k)return;
   const c=byId(sel);
   if(c&&c.end<c.start+0.1){c.end=snap(c.start+0.1);render()}
@@ -822,7 +932,7 @@ $('#inspector').addEventListener('click',e=>{
 document.querySelectorAll('[data-cmd]').forEach(b=>b.addEventListener('click',()=>commands[b.dataset.cmd]()));
 
 addEventListener('keydown',e=>{
-  const typing=/INPUT|TEXTAREA|SELECT/.test(e.target.tagName);
+  const typing=isTyping(e.target);
   const mod=e.ctrlKey||e.metaKey;
   if(mod&&e.key.toLowerCase()==='z'&&!typing){e.preventDefault();e.shiftKey?redo():undo()}
   else if(mod&&e.key.toLowerCase()==='y'&&!typing){e.preventDefault();redo()}
@@ -833,7 +943,7 @@ addEventListener('keydown',e=>{
 });
 
 addEventListener('paste',e=>{
-  if(/INPUT|TEXTAREA/.test(e.target.tagName))return;
+  if(isTyping(document.activeElement))return;
   const files=[...(e.clipboardData?.files||[])].filter(f=>f.type.startsWith('image/'));
   if(files.length){e.preventDefault();addImages(files)}
 });
@@ -876,8 +986,8 @@ function demoProject(){
       start:1.2,end:6.4,enter:'left',enterLen:.5,exit:'fade',exitLen:.4,kb:{z0:1,x0:0,y0:0,z1:1.6,x1:100,y1:50}}),
     newClip('text',Object.assign({text:'We asked 28 students how many hours they slept last night.',x:62,y:34,w:34,lane:1,start:1.6,end:2.9,enter:'right'},card)),
     newClip('text',Object.assign({text:'Most of us slept 7 to 9 hours.\n\nThe median is 8 hours.\nThe mean is 7.96 hours.',x:62,y:30,w:34,lane:1,start:3.0,end:4.3,enter:'right'},card)),
-    newClip('text',Object.assign({text:'But one person slept 14 hours!\n\nThat’s an outlier: more than 1.5 × IQR above Q3.',x:62,y:30,w:34,lane:1,start:4.4,end:6.2,enter:'zoom',motion:'drift',enterLen:.4},card)),
-    newClip('text',{text:'Range: 10 hours.\nIQR: 2 hours.\n\nOne outlier can make the range tell a very different story.',size:55,align:'center',x:10,y:28,w:80,start:6.6,end:8,enter:'bottom',enterLen:.5,exit:'none'}),
+    newClip('text',Object.assign({html:'But one person slept <b style="color:#f43f5e">14 hours</b>!<br><br>That’s an <i>outlier</i>: more than 1.5 × IQR above Q3.',x:62,y:30,w:34,lane:1,start:4.4,end:6.2,enter:'zoom',motion:'drift',enterLen:.4},card)),
+    newClip('text',{html:'Range: 10 hours.<br>IQR: 2 hours.<br><br>One outlier can make the range tell a very different story.<br><br><a href="https://en.wikipedia.org/wiki/Interquartile_range">What’s an IQR?</a>',size:55,align:'center',x:10,y:28,w:80,start:6.6,end:8,enter:'bottom',enterLen:.5,exit:'none'}),
   ]};
 }
 

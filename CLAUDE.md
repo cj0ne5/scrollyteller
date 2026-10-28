@@ -34,6 +34,11 @@ The users are a math teacher and their students, doing a descriptive-statistics 
 
 - **Time** is measured in "screens" (1 = one viewport height of scrolling). Clip `start` and `end` snap to 0.1.
 - **Position and size** (`x`, `y`, `w`, `h`) are percentages of the stage. Text has auto height, so `h` only applies to images.
+- **Text clips store rich text in `html`.**
+  - It's edited in the `#rt` contenteditable using `document.execCommand`, with a toolbar for bold, italic, underline, bullet lists, links, colour and clear formatting.
+  - It's always passed through `sanitize()`, which keeps simple tags, inline `color` styles and http(s)/mailto links (opened with `target=_blank`), and strips everything else.
+  - `newClip()` sanitises on every load and converts old plain-text `text` fields.
+  - The runtime trusts `html` and sets it with `innerHTML`, so anything that writes `html` must sanitise first.
 - **Font size** is `size / 10` in `cqmin`. The stage is a size container, so the preview and the export scale identically.
 - **Effects**:
   - `enter` and `exit` each take one of `none | fade | left | right | top | bottom | zoom`, with a duration in screens (`enterLen` / `exitLen`).
@@ -62,6 +67,7 @@ There are no automated tests in the repo. To verify a change:
 Done:
 - The timeline: drag, stretch, change layer, scrub.
 - Text and image clips, with drag-and-drop and paste for images.
+- Rich text in text clips, including links.
 - Effects and the image camera.
 - Dragging and resizing in the preview.
 - Undo/redo, auto-save, saving and opening project JSON, and reopening exported HTML.
